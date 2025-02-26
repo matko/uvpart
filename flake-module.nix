@@ -58,6 +58,16 @@ in
                 description = "whether to use the pure or impure shell as the default shell. 'none' will set no default shell.";
                 default = "pure";
               };
+              publishPackage = mkOption {
+                type = types.bool;
+                description = "Whether to expose the scripts as the default package";
+                default = true;
+              };
+              publishApps = mkOption {
+                type = types.bool;
+                description = "Whether to expose the scripts as flake apps";
+                default = true;
+              };
               editableFilterSet = mkOption {
                 type = types.listOf types.path;
                 description = "A list of paths which make up the editable filter set. The 'editable' version of the python package will only be considered 'changed' if any file in these paths changes. Setting this ensures that most source changes will not trigger a rebuild. By default, only pyproject.toml is considered.";
@@ -104,6 +114,7 @@ in
         projectName = projectToml.project.name;
         projectName' = if uvpart.projectName == null then projectName else uvpart.projectName;
         moduleName = builtins.replaceStrings [ "-" ] [ "_" ] projectName;
+        scripts = builtins.attrNames (projectToml.project.scripts or { });
         editablePythonSet = pythonSet.overrideScope (
           lib.composeManyExtensions [
             (final: prev: {
@@ -155,15 +166,18 @@ in
             + uvpart.shellHook;
 
         };
-        virtualEnv = (editablePythonSet.mkVirtualEnv (projectName' + "-editable-env") workspace.deps.all);
+        environment = pythonSet.mkVirtualEnv (projectName' + "-env") workspace.deps.default;
+        editableEnvironment = (
+          editablePythonSet.mkVirtualEnv (projectName' + "-editable-env") workspace.deps.all
+        );
         pure-shell = pkgs.mkShell {
           packages = [
-            virtualEnv
+            editableEnvironment
             uvpart.uv
           ] ++ uvpart.extraPackages;
           env = {
             UV_NO_SYNC = "1";
-            UV_PYTHON = "${virtualEnv}/bin/python";
+            UV_PYTHON = "${editableEnvironment}/bin/python";
             UV_PYTHON_DOWNLOADS = "never";
 
           };
@@ -183,12 +197,43 @@ in
             { default = impure-shell; }
           else
             { };
+
+        package = pkgs.stdenv.mkDerivation {
+          name = projectName';
+          phases = [ "installPhase" ];
+          inherit scripts;
+          installPhase = ''
+            mkdir -p $out/bin
+            for script in $scripts; do
+              ln -s ${environment}/bin/$script $out/bin/$script
+            done
+          '';
+        };
+        defaultPackageExtension = lib.optionalAttrs uvpart.publishPackage {
+          default = package;
+        };
+        defaultApps = lib.optionalAttrs uvpart.publishApps (
+          builtins.listToAttrs (
+            map (name: {
+              inherit name;
+              value = {
+                type = "app";
+                program = "${package}/bin/${name}";
+              };
+            }) scripts
+          )
+        );
+
       in
       {
         config = {
           uvpart.outputs = {
-            inherit pure-shell;
-            environment = pythonSet.mkVirtualEnv (projectName' + "-env") workspace.deps.default;
+            inherit
+              pure-shell
+              impure-shell
+              environment
+              package
+              ;
           };
           devShells = {
             uv-pure-shell = pure-shell;
@@ -199,7 +244,8 @@ in
               #!${pkgs.bash}/bin/bash
               ${uvpart.uv}/bin/uv lock --python ${uvpart.python}/bin/python
             '';
-          };
+          } // defaultPackageExtension;
+          apps = defaultApps;
         };
       };
   };
