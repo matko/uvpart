@@ -103,6 +103,9 @@ in
                 [
                   inputs.pyproject-build-systems.overlays.default
                   overlay
+                  (pkgs.callPackage ./fix-git-deps.nix {
+                    uvlock = builtins.fromTOML (builtins.readFile "${inputs.self}/uv.lock");
+                  })
                 ]
                 ++ uvpart.pythonOverlays
               )
