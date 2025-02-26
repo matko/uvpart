@@ -233,6 +233,7 @@ in
               impure-shell
               environment
               package
+              pythonSet
               ;
           };
           devShells = {
