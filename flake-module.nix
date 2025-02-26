@@ -240,7 +240,7 @@ in
             uv-impure-shell = impure-shell;
           } // defaultShellExtension;
           packages = {
-            uvpython-uv-lock = pkgs.writeScriptBin "uv-lock" ''
+            uv-lock = pkgs.writeScriptBin "uv-lock" ''
               #!${pkgs.bash}/bin/bash
               ${uvpart.uv}/bin/uv lock --python ${uvpart.python}/bin/python
             '';
