@@ -103,6 +103,7 @@ in
         projectToml = builtins.fromTOML (builtins.readFile "${inputs.self}/pyproject.toml");
         projectName = projectToml.project.name;
         projectName' = if uvpart.projectName == null then projectName else uvpart.projectName;
+        moduleName = builtins.replaceStrings [ "-" ] [ "_" ] projectName;
         editablePythonSet = pythonSet.overrideScope (
           lib.composeManyExtensions [
             (final: prev: {
@@ -115,6 +116,8 @@ in
                       fileset = lib.fileset.unions (
                         [
                           (old.src + "/pyproject.toml")
+                          (lib.fileset.maybeMissing (old.src + "/README.md"))
+                          (lib.fileset.maybeMissing (old.src + "/${moduleName}/__init__.py"))
                         ]
                         ++ uvpart.editableFilterSet
                       );
