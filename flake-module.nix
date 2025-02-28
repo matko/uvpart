@@ -74,7 +74,7 @@ in
                 default = [ ];
               };
               python = mkPackageOption pkgs "python" {
-                default = "python3";
+                default = "python313";
               };
               uv = mkPackageOption pkgs "uv" { };
             };
