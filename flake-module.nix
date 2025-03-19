@@ -97,6 +97,11 @@ in
         pythonSet =
           (pkgs.callPackage inputs.pyproject-nix.build.packages {
             python = uvpart.python;
+            stdenv = pkgs.stdenv.override {
+              targetPlatform = pkgs.stdenv.targetPlatform // {
+                darwinSdkVersion = "15.1";
+              };
+            };
           }).overrideScope
             (
               lib.composeManyExtensions (
