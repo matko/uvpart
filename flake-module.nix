@@ -247,6 +247,7 @@ in
               impure-shell
               environment
               package
+              workspace
               pythonSet
               ;
           };
