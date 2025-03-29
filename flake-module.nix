@@ -39,6 +39,11 @@ in
                 description = "extra python overlays to apply (for fixups)";
                 default = [ ];
               };
+              workspaceConfig = mkOption {
+                type = types.oneOf [ (types.functionTo types.attrs) types.attrs ];
+                description = "the workspace configuration";
+                default = _: {};
+              };
               extraPackages = mkOption {
                 type = types.listOf types.package;
                 description = "extra packages to include in the dev shells";
@@ -90,6 +95,7 @@ in
         inherit (config) uvpart;
         workspace = inputs.uv2nix.lib.workspace.loadWorkspace {
           workspaceRoot = uvpart.workspaceRoot;
+          config = uvpart.workspaceConfig;
         };
         overlay = workspace.mkPyprojectOverlay {
           sourcePreference = "wheel";
