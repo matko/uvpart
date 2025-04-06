@@ -24,6 +24,7 @@ in
             options = {
               outputs = mkOption {
                 description = "uvpart will write an output set to this option";
+                internal = true;
               };
               workspaceRoot = mkOption {
                 type = types.path;
@@ -40,9 +41,22 @@ in
                 default = [ ];
               };
               workspaceConfig = mkOption {
-                type = types.oneOf [ (types.functionTo types.attrs) types.attrs ];
+                type = types.oneOf [
+                  (types.functionTo types.attrs)
+                  types.attrs
+                ];
                 description = "the workspace configuration";
-                default = _: {};
+                default = _: { };
+              };
+              dependencyGroups = mkOption {
+                type = types.nullOr (
+                  types.oneOf [
+                    types.str
+                    (types.listOf types.str)
+                  ]
+                );
+                description = "the dependency groups to enable. The default is to enable all of them. You can set this either to a string to get the corresponding property on the workspace, or set it to a list of strings, referring to dependency groups in your pyproject.toml.";
+                default = null;
               };
               extraPackages = mkOption {
                 type = types.listOf types.package;
@@ -93,6 +107,8 @@ in
       { pkgs, config, ... }:
       let
         inherit (config) uvpart;
+        projectToml = builtins.fromTOML (builtins.readFile "${inputs.self}/pyproject.toml");
+        projectName = projectToml.project.name;
         workspace = inputs.uv2nix.lib.workspace.loadWorkspace {
           workspaceRoot = uvpart.workspaceRoot;
           config = uvpart.workspaceConfig;
@@ -124,8 +140,6 @@ in
         editableOverlay = workspace.mkEditablePyprojectOverlay {
           root = "$REPO_ROOT";
         };
-        projectToml = builtins.fromTOML (builtins.readFile "${inputs.self}/pyproject.toml");
-        projectName = projectToml.project.name;
         projectName' = if uvpart.projectName == null then projectName else uvpart.projectName;
         moduleName = builtins.replaceStrings [ "-" ] [ "_" ] projectName;
         scripts = builtins.attrNames (projectToml.project.scripts or { });
@@ -180,10 +194,33 @@ in
             + uvpart.shellHook;
 
         };
-        environment = pythonSet.mkVirtualEnv (projectName' + "-env") workspace.deps.default;
-        editableEnvironment = (
-          editablePythonSet.mkVirtualEnv (projectName' + "-editable-env") workspace.deps.all
-        );
+
+        makeDeps =
+          dependencyGroups:
+          if dependencyGroups != null then
+            (
+              if (builtins.typeOf dependencyGroups) == "string" then
+                workspace.deps.${dependencyGroups}
+              else
+                workspace.deps.all
+                // {
+                  ${projectName} = dependencyGroups;
+                }
+            )
+          else
+            workspace.deps.default;
+        environment = pkgs.callPackage (
+          {
+            dependencyGroups ? uvpart.dependencyGroups,
+          }:
+          pythonSet.mkVirtualEnv (projectName' + "-env") (makeDeps dependencyGroups)
+        ) { };
+        editableEnvironment = pkgs.callPackage (
+          {
+            dependencyGroups ? "all",
+          }:
+          editablePythonSet.mkVirtualEnv (projectName' + "-editable-env") (makeDeps dependencyGroups)
+        ) { };
         pure-shell = pkgs.mkShell {
           packages = [
             editableEnvironment
@@ -212,17 +249,25 @@ in
           else
             { };
 
-        package = pkgs.stdenv.mkDerivation {
-          name = projectName';
-          phases = [ "installPhase" ];
-          inherit scripts;
-          installPhase = ''
-            mkdir -p $out/bin
-            for script in $scripts; do
-              ln -s ${environment}/bin/$script $out/bin/$script
-            done
-          '';
-        };
+        package = pkgs.callPackage (
+          {
+            dependencyGroups ? uvpart.dependencyGroups,
+          }:
+          let
+            environment' = environment.override { inherit dependencyGroups; };
+          in
+          pkgs.stdenv.mkDerivation {
+            name = projectName';
+            phases = [ "installPhase" ];
+            inherit scripts;
+            installPhase = ''
+              mkdir -p $out/bin
+              for script in $scripts; do
+                ln -s ${environment'}/bin/$script $out/bin/$script
+              done
+            '';
+          }
+        ) { };
         defaultPackageExtension = lib.optionalAttrs uvpart.publishPackage {
           default = package;
         };
@@ -237,7 +282,6 @@ in
             }) scripts
           )
         );
-
       in
       {
         config = {
@@ -246,6 +290,7 @@ in
               pure-shell
               impure-shell
               environment
+              editableEnvironment
               package
               workspace
               pythonSet
