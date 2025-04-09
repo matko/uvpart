@@ -255,17 +255,11 @@ in
           }:
           let
             environment' = environment.override { inherit dependencyGroups; };
+            inherit (pkgs.callPackages inputs.pyproject-nix.build.util { }) mkApplication;
           in
-          pkgs.stdenv.mkDerivation {
-            name = projectName';
-            phases = [ "installPhase" ];
-            inherit scripts;
-            installPhase = ''
-              mkdir -p $out/bin
-              for script in $scripts; do
-                ln -s ${environment'}/bin/$script $out/bin/$script
-              done
-            '';
+          mkApplication {
+            venv = environment';
+            package = pythonSet.${projectName};
           }
         ) { };
         defaultPackageExtension = lib.optionalAttrs uvpart.publishPackage {
