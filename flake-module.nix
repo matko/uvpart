@@ -299,6 +299,7 @@ in
               #!${pkgs.bash}/bin/bash
               ${uvpart.uv}/bin/uv lock --python ${uvpart.python}/bin/python
             '';
+            ${projectName'} = package;
           } // defaultPackageExtension;
           apps = defaultApps;
         };
