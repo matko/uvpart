@@ -156,7 +156,9 @@ in
                         [
                           (old.src + "/pyproject.toml")
                           (lib.fileset.maybeMissing (old.src + "/README.md"))
+                          # TODO - check pyproject.toml for exact locations of modules to include
                           (lib.fileset.maybeMissing (old.src + "/${moduleName}/__init__.py"))
+                          (lib.fileset.maybeMissing (old.src + "/src/${moduleName}/__init__.py"))
                         ]
                         ++ uvpart.editableFilterSet
                       );
@@ -288,6 +290,7 @@ in
               package
               workspace
               pythonSet
+              editablePythonSet
               ;
           };
           devShells = {
