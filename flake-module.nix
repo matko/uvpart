@@ -88,7 +88,7 @@ in
                 default = true;
               };
               editableFilterSet = mkOption {
-                type = types.listOf types.path;
+                type = types.listOf types.unspecified;
                 description = "A list of paths which make up the editable filter set. The 'editable' version of the python package will only be considered 'changed' if any file in these paths changes. Setting this ensures that most source changes will not trigger a rebuild. By default, only pyproject.toml is considered.";
                 default = [ ];
               };
