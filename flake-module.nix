@@ -230,7 +230,7 @@ in
           ] ++ uvpart.extraPackages;
           env = {
             UV_NO_SYNC = "1";
-            UV_PYTHON = "${editableEnvironment}/bin/python";
+            UV_PYTHON = uvpart.python.interpreter;
             UV_PYTHON_DOWNLOADS = "never";
 
           };
