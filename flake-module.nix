@@ -296,19 +296,22 @@ in
           lib.composeManyExtensions [
             (
               final: prev:
-              # Only override if we have a valid project name
-              lib.optionalAttrs (projectName' != null) {
-                "${projectName'}" =
-                  (prev.${projectName'} or (throw "Project ${projectName'} not found in python set")).overrideAttrs
-                    (old: {
-                      src = buildEditableFileset old.src;
-                      nativeBuildInputs =
-                        old.nativeBuildInputs
-                        ++ final.resolveBuildSystem {
-                          editables = [ ];
-                        };
-                    });
-              }
+              # Override all projects that exist in the python set
+              builtins.listToAttrs (
+                map (projectName: {
+                  name = projectName;
+                  value =
+                    (prev.${projectName} or (throw "Project ${projectName} not found in python set")).overrideAttrs
+                      (old: {
+                        src = buildEditableFileset old.src;
+                        nativeBuildInputs =
+                          old.nativeBuildInputs
+                          ++ final.resolveBuildSystem {
+                            editables = [ ];
+                          };
+                      });
+                }) (builtins.filter (name: builtins.hasAttr name prev) (builtins.attrNames allPackages))
+              )
             )
             editableOverlay
           ]
