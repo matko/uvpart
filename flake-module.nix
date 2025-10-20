@@ -471,9 +471,6 @@ in
             }
             // lib.optionalAttrs (editableEnvironment != null) {
               inherit editableEnvironment;
-            }
-            // lib.optionalAttrs (package != null) {
-              inherit package;
             };
           devShells = {
             uv-pure-shell = pure-shell;
