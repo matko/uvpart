@@ -400,23 +400,28 @@ in
           else
             { };
 
-        # Build packages for all projects
-        packages = builtins.mapAttrs (
-          name: projectInfo:
-          pkgs.callPackage (
-            {
-              dependencyGroups ? uvpart.dependencyGroups,
-            }:
-            let
-              environment' = environment.override { inherit dependencyGroups; };
-              inherit (pkgs.callPackages inputs.pyproject-nix.build.util { }) mkApplication;
-            in
-            mkApplication {
-              venv = environment';
-              package = pythonSet.${projectInfo.projectName};
-            }
-          ) { }
-        ) allPackages;
+        # Build packages for all projects that actually exist in pythonSet
+        packages =
+          builtins.mapAttrs
+            (
+              name: projectInfo:
+              pkgs.callPackage (
+                {
+                  dependencyGroups ? uvpart.dependencyGroups,
+                }:
+                let
+                  environment' = environment.override { inherit dependencyGroups; };
+                  inherit (pkgs.callPackages inputs.pyproject-nix.build.util { }) mkApplication;
+                in
+                mkApplication {
+                  venv = environment';
+                  package = pythonSet.${projectInfo.projectName};
+                }
+              ) { }
+            )
+            (
+              lib.filterAttrs (name: projectInfo: builtins.hasAttr projectInfo.projectName pythonSet) allPackages
+            );
 
         # Choose default package (prefer root project, fallback to first workspace member)
         defaultPackage =
