@@ -187,74 +187,76 @@ in
             resolveWorkspaceMembers (workspaceConfig.members or [ ]) (workspaceConfig.exclude or [ ])
           else
             [ ];
+
+        # Shared function to build editable fileset
+        buildEditableFileset =
+          root:
+          if lib.isPath root then
+            let
+              baseFiles = [
+                (root + "/pyproject.toml")
+                (lib.fileset.maybeMissing (root + "/README.md"))
+              ] ++ uvpart.editableFilterSet;
+
+              workspaceFiles =
+                if isWorkspace then
+                  # For workspaces, include minimal files for each member
+                  builtins.concatMap (
+                    memberPath:
+                    let
+                      memberDir = root + "/${memberPath}";
+                      memberTomlPath = memberDir + "/pyproject.toml";
+                    in
+                    if builtins.pathExists memberTomlPath then
+                      let
+                        memberToml = builtins.fromTOML (builtins.readFile memberTomlPath);
+                        memberProjectName = memberToml.project.name or null;
+                        memberModuleName =
+                          if memberProjectName != null then
+                            builtins.replaceStrings [ "-" ] [ "_" ] memberProjectName
+                          else
+                            null;
+                      in
+                      [
+                        memberTomlPath
+                        (lib.fileset.maybeMissing (memberDir + "/README.md"))
+                      ]
+                      ++ lib.optionals (memberModuleName != null) [
+                        (lib.fileset.maybeMissing (memberDir + "/${memberModuleName}/__init__.py"))
+                        (lib.fileset.maybeMissing (memberDir + "/src/${memberModuleName}/__init__.py"))
+                      ]
+                    else
+                      [ ]
+                  ) workspaceMembers
+                else
+                  # For single projects, include the module directories
+                  let
+                    moduleName = builtins.replaceStrings [ "-" ] [ "_" ] projectName';
+                  in
+                  [
+                    (lib.fileset.maybeMissing (root + "/${moduleName}/__init__.py"))
+                    (lib.fileset.maybeMissing (root + "/src/${moduleName}/__init__.py"))
+                  ];
+            in
+            lib.fileset.toSource {
+              root = root;
+              fileset = lib.fileset.unions (baseFiles ++ workspaceFiles);
+            }
+          else
+            null;
+
+        # Debug output for editable fileset
+        editableFilesetDebug = buildEditableFileset uvpart.workspaceRoot;
         editablePythonSet = pythonSet.overrideScope (
           lib.composeManyExtensions [
             (
               final: prev:
-              let
-                # Build fileset based on whether this is a workspace or single project
-                buildFileset =
-                  old:
-                  if lib.isPath uvpart.workspaceRoot then
-                    let
-                      baseFiles = [
-                        (old.src + "/pyproject.toml")
-                        (lib.fileset.maybeMissing (old.src + "/README.md"))
-                      ] ++ uvpart.editableFilterSet;
-
-                      workspaceFiles =
-                        if isWorkspace then
-                          # For workspaces, include minimal files for each member
-                          builtins.concatMap (
-                            memberPath:
-                            let
-                              memberDir = old.src + "/${memberPath}";
-                              memberTomlPath = memberDir + "/pyproject.toml";
-                            in
-                            if builtins.pathExists memberTomlPath then
-                              let
-                                memberToml = builtins.fromTOML (builtins.readFile memberTomlPath);
-                                memberProjectName = memberToml.project.name or null;
-                                memberModuleName =
-                                  if memberProjectName != null then
-                                    builtins.replaceStrings [ "-" ] [ "_" ] memberProjectName
-                                  else
-                                    null;
-                              in
-                              [
-                                memberTomlPath
-                                (lib.fileset.maybeMissing (memberDir + "/README.md"))
-                              ]
-                              ++ lib.optionals (memberModuleName != null) [
-                                (lib.fileset.maybeMissing (memberDir + "/${memberModuleName}/__init__.py"))
-                                (lib.fileset.maybeMissing (memberDir + "/src/${memberModuleName}/__init__.py"))
-                              ]
-                            else
-                              [ ]
-                          ) workspaceMembers
-                        else
-                          # For single projects, include the module directories
-                          let
-                            moduleName = builtins.replaceStrings [ "-" ] [ "_" ] projectName';
-                          in
-                          [
-                            (lib.fileset.maybeMissing (old.src + "/${moduleName}/__init__.py"))
-                            (lib.fileset.maybeMissing (old.src + "/src/${moduleName}/__init__.py"))
-                          ];
-                    in
-                    lib.fileset.toSource {
-                      root = old.src;
-                      fileset = lib.fileset.unions (baseFiles ++ workspaceFiles);
-                    }
-                  else
-                    old.src;
-              in
               # Only override if we have a valid project name
               lib.optionalAttrs (projectName' != null) {
                 "${projectName'}" =
                   (prev.${projectName'} or (throw "Project ${projectName'} not found in python set")).overrideAttrs
                     (old: {
-                      src = buildFileset old;
+                      src = buildEditableFileset old.src;
                       nativeBuildInputs =
                         old.nativeBuildInputs
                         ++ final.resolveBuildSystem {
@@ -395,6 +397,7 @@ in
                 workspace
                 pythonSet
                 editablePythonSet
+                editableFilesetDebug
                 ;
             }
             // lib.optionalAttrs (environment != null) {
