@@ -108,7 +108,11 @@ in
       let
         inherit (config) uvpart;
         projectToml = builtins.fromTOML (builtins.readFile "${inputs.self}/pyproject.toml");
-        projectName = projectToml.project.name;
+        workspaceConfig = projectToml.tool.uv.workspace or null;
+        isWorkspace = workspaceConfig != null;
+        # Only use project name from toml if it exists and we're not overriding it
+        projectNameFromToml = projectToml.project.name or null;
+        projectName' = if uvpart.projectName != null then uvpart.projectName else projectNameFromToml;
         workspace = inputs.uv2nix.lib.workspace.loadWorkspace {
           workspaceRoot = uvpart.workspaceRoot;
           config = uvpart.workspaceConfig;
@@ -140,39 +144,153 @@ in
         editableOverlay = workspace.mkEditablePyprojectOverlay {
           root = "$REPO_ROOT";
         };
-        projectName' = if uvpart.projectName == null then projectName else uvpart.projectName;
-        moduleName = builtins.replaceStrings [ "-" ] [ "_" ] projectName;
         scripts = builtins.attrNames (projectToml.project.scripts or { });
+
+        # Collect all packages and scripts (workspace members + root project)
+        allPackages =
+          workspaceMemberProjects
+          // lib.optionalAttrs (projectName' != null) {
+            ${projectName'} = {
+              projectName = projectName';
+              scripts = scripts;
+            };
+          };
+
+        # Helper function to resolve glob patterns in workspace members
+        resolveWorkspaceMembers =
+          members: excludes:
+          let
+            allPaths = builtins.concatMap (
+              member:
+              if lib.hasSuffix "/*" member then
+                let
+                  baseDir = lib.removeSuffix "/*" member;
+                  basePath = uvpart.workspaceRoot + "/${baseDir}";
+                in
+                if builtins.pathExists basePath then
+                  map (name: "${baseDir}/${name}") (
+                    builtins.filter (name: builtins.pathExists (basePath + "/${name}/pyproject.toml")) (
+                      builtins.attrNames (builtins.readDir basePath)
+                    )
+                  )
+                else
+                  [ ]
+              else
+                [ member ]
+            ) members;
+            filteredPaths = builtins.filter (
+              path:
+              !builtins.any (
+                exclude:
+                if lib.hasSuffix "/*" exclude then
+                  lib.hasPrefix (lib.removeSuffix "/*" exclude) path
+                else
+                  path == exclude
+              ) excludes
+            ) allPaths;
+          in
+          filteredPaths;
+
+        # Get workspace members if this is a workspace
+        workspaceMembers =
+          if isWorkspace then
+            resolveWorkspaceMembers (workspaceConfig.members or [ ]) (workspaceConfig.exclude or [ ])
+          else
+            [ ];
+
+        # Get all workspace member project info
+        workspaceMemberProjects =
+          if isWorkspace then
+            builtins.listToAttrs (
+              builtins.filter (x: x != null) (
+                map (
+                  memberPath:
+                  let
+                    memberDir = uvpart.workspaceRoot + "/${memberPath}";
+                    memberTomlPath = memberDir + "/pyproject.toml";
+                  in
+                  if builtins.pathExists memberTomlPath then
+                    let
+                      memberToml = builtins.fromTOML (builtins.readFile memberTomlPath);
+                      memberProjectName = memberToml.project.name or null;
+                      memberScripts = builtins.attrNames (memberToml.project.scripts or { });
+                    in
+                    if memberProjectName != null then
+                      {
+                        name = memberProjectName;
+                        value = {
+                          projectName = memberProjectName;
+                          scripts = memberScripts;
+                        };
+                      }
+                    else
+                      null
+                  else
+                    null
+                ) workspaceMembers
+              )
+            )
+          else
+            { };
+
+        # Shared function to build editable fileset for a specific package
+        buildEditableFileset =
+          root:
+          let
+            # Read the pyproject.toml for this specific package
+            pyprojectPath = root + "/pyproject.toml";
+            pyprojectToml =
+              if builtins.pathExists pyprojectPath then
+                builtins.fromTOML (builtins.readFile pyprojectPath)
+              else
+                { };
+
+            # Get the project name and derive module name
+            packageProjectName = pyprojectToml.project.name or null;
+            moduleName =
+              if packageProjectName != null then
+                builtins.replaceStrings [ "-" ] [ "_" ] packageProjectName
+              else
+                null;
+
+            # Base files for any package
+            baseFiles = [
+              pyprojectPath
+              (lib.fileset.maybeMissing (root + "/README.md"))
+            ] ++ uvpart.editableFilterSet;
+
+            # Module files - same logic for workspace members and single projects
+            moduleFiles = lib.optionals (moduleName != null) [
+              (lib.fileset.maybeMissing (root + "/${moduleName}/__init__.py"))
+              (lib.fileset.maybeMissing (root + "/src/${moduleName}/__init__.py"))
+            ];
+          in
+          lib.fileset.toSource {
+            root = root;
+            fileset = lib.fileset.unions (baseFiles ++ moduleFiles);
+          };
+
         editablePythonSet = pythonSet.overrideScope (
           lib.composeManyExtensions [
-            (final: prev: {
-              "${projectName}" = prev.${projectName}.overrideAttrs (old: {
-                # if workspaceRoot is a path (as in, it was not automatically derived) we're able to do much faster rebuilds.
-                src =
-                  if lib.isPath uvpart.workspaceRoot then
-                    (lib.fileset.toSource {
-                      root = old.src;
-                      fileset = lib.fileset.unions (
-                        [
-                          (old.src + "/pyproject.toml")
-                          (lib.fileset.maybeMissing (old.src + "/README.md"))
-                          # TODO - check pyproject.toml for exact locations of modules to include
-                          (lib.fileset.maybeMissing (old.src + "/${moduleName}/__init__.py"))
-                          (lib.fileset.maybeMissing (old.src + "/src/${moduleName}/__init__.py"))
-                        ]
-                        ++ uvpart.editableFilterSet
-                      );
-                    })
-                  else
-                    old.src;
-
-                nativeBuildInputs =
-                  old.nativeBuildInputs
-                  ++ final.resolveBuildSystem {
-                    editables = [ ];
-                  };
-              });
-            })
+            (
+              final: prev:
+              # Override all projects that exist in the python set
+              builtins.listToAttrs (
+                map (projectName: {
+                  name = projectName;
+                  value =
+                    (prev.${projectName} or (throw "Project ${projectName} not found in python set")).overrideAttrs
+                      (old: {
+                        src = buildEditableFileset old.src;
+                        nativeBuildInputs =
+                          old.nativeBuildInputs
+                          ++ final.resolveBuildSystem {
+                            editables = [ ];
+                          };
+                      });
+                }) (builtins.filter (name: builtins.hasAttr name prev) (builtins.attrNames allPackages))
+              )
+            )
             editableOverlay
           ]
         );
@@ -205,29 +323,41 @@ in
                 workspace.deps.${dependencyGroups}
               else
                 workspace.deps.all
-                // {
-                  ${projectName} = dependencyGroups;
+                // lib.optionalAttrs (projectName' != null) {
+                  ${projectName'} = dependencyGroups;
                 }
             )
           else
             workspace.deps.default;
-        environment = pkgs.callPackage (
-          {
-            dependencyGroups ? uvpart.dependencyGroups,
-          }:
-          pythonSet.mkVirtualEnv (projectName' + "-env") (makeDeps dependencyGroups)
-        ) { };
-        editableEnvironment = pkgs.callPackage (
-          {
-            dependencyGroups ? "all",
-          }:
-          editablePythonSet.mkVirtualEnv (projectName' + "-editable-env") (makeDeps dependencyGroups)
-        ) { };
+        environment =
+          if projectName' != null then
+            pkgs.callPackage (
+              {
+                dependencyGroups ? uvpart.dependencyGroups,
+              }:
+              pythonSet.mkVirtualEnv (projectName' + "-env") (makeDeps dependencyGroups)
+            ) { }
+          else
+            null;
+        editableEnvironment =
+          if projectName' != null then
+            pkgs.callPackage (
+              {
+                dependencyGroups ? "all",
+              }:
+              editablePythonSet.mkVirtualEnv (projectName' + "-editable-env") (makeDeps dependencyGroups)
+            ) { }
+          else
+            null;
         pure-shell = pkgs.mkShell {
-          packages = [
-            editableEnvironment
-            uvpart.uv
-          ] ++ uvpart.extraPackages;
+          packages =
+            lib.optionals (editableEnvironment != null) [
+              editableEnvironment
+            ]
+            ++ [
+              uvpart.uv
+            ]
+            ++ uvpart.extraPackages;
           env = {
             UV_NO_SYNC = "1";
             UV_PYTHON = uvpart.python.interpreter;
@@ -251,59 +381,95 @@ in
           else
             { };
 
-        package = pkgs.callPackage (
-          {
-            dependencyGroups ? uvpart.dependencyGroups,
-          }:
-          let
-            environment' = environment.override { inherit dependencyGroups; };
-            inherit (pkgs.callPackages inputs.pyproject-nix.build.util { }) mkApplication;
-          in
-          mkApplication {
-            venv = environment';
-            package = pythonSet.${projectName};
-          }
-        ) { };
-        defaultPackageExtension = lib.optionalAttrs uvpart.publishPackage {
-          default = package;
+        # Build packages for all projects that actually exist in pythonSet
+        packages =
+          builtins.mapAttrs
+            (
+              name: projectInfo:
+              pkgs.callPackage (
+                {
+                  dependencyGroups ? uvpart.dependencyGroups,
+                }:
+                let
+                  environment' = environment.override { inherit dependencyGroups; };
+                  inherit (pkgs.callPackages inputs.pyproject-nix.build.util { }) mkApplication;
+                in
+                mkApplication {
+                  venv = environment';
+                  package = pythonSet.${projectInfo.projectName};
+                }
+              ) { }
+            )
+            (
+              lib.filterAttrs (name: projectInfo: builtins.hasAttr projectInfo.projectName pythonSet) allPackages
+            );
+
+        # Choose default package (prefer root project, fallback to first workspace member)
+        defaultPackage =
+          if projectName' != null && builtins.hasAttr projectName' packages then
+            packages.${projectName'}
+          else if builtins.length (builtins.attrNames packages) > 0 then
+            packages.${builtins.head (builtins.attrNames packages)}
+          else
+            null;
+
+        defaultPackageExtension = lib.optionalAttrs (uvpart.publishPackage && defaultPackage != null) {
+          default = defaultPackage;
         };
-        defaultApps = lib.optionalAttrs uvpart.publishApps (
-          builtins.listToAttrs (
-            map (name: {
-              inherit name;
-              value = {
-                type = "app";
-                program = "${package}/bin/${name}";
-              };
-            }) scripts
-          )
-        );
+
+        # Build apps for all projects
+        allApps = builtins.concatMap (
+          name:
+          let
+            projectInfo = allPackages.${name};
+            package = packages.${name};
+          in
+          map (scriptName: {
+            name =
+              if builtins.length (builtins.attrNames allPackages) > 1 then
+                "${name}-${scriptName}"
+              else
+                scriptName;
+            value = {
+              type = "app";
+              program = "${package}/bin/${scriptName}";
+            };
+          }) projectInfo.scripts
+        ) (builtins.attrNames allPackages);
+
+        defaultApps = lib.optionalAttrs uvpart.publishApps (builtins.listToAttrs allApps);
       in
       {
         config = {
-          uvpart.outputs = {
-            inherit
-              pure-shell
-              impure-shell
-              environment
-              editableEnvironment
-              package
-              workspace
-              pythonSet
-              editablePythonSet
-              ;
-          };
+          uvpart.outputs =
+            {
+              inherit
+                pure-shell
+                impure-shell
+                workspace
+                pythonSet
+                editablePythonSet
+                ;
+            }
+            // lib.optionalAttrs (environment != null) {
+              inherit environment;
+            }
+            // lib.optionalAttrs (editableEnvironment != null) {
+              inherit editableEnvironment;
+            };
           devShells = {
             uv-pure-shell = pure-shell;
             uv-impure-shell = impure-shell;
           } // defaultShellExtension;
-          packages = {
-            uv-lock = pkgs.writeScriptBin "uv-lock" ''
-              #!${pkgs.bash}/bin/bash
-              ${uvpart.uv}/bin/uv lock --python ${uvpart.python}/bin/python
-            '';
-            ${projectName'} = package;
-          } // defaultPackageExtension;
+          packages =
+            {
+              uv-lock = pkgs.writeScriptBin "uv-lock" ''
+                #!${pkgs.bash}/bin/bash
+                ${uvpart.uv}/bin/uv lock --python ${uvpart.python}/bin/python
+              '';
+            }
+            // packages
+            // defaultPackageExtension;
           apps = defaultApps;
         };
       };
