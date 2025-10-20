@@ -146,6 +146,16 @@ in
         };
         scripts = builtins.attrNames (projectToml.project.scripts or { });
 
+        # Collect all packages and scripts (workspace members + root project)
+        allPackages =
+          workspaceMemberProjects
+          // lib.optionalAttrs (projectName' != null) {
+            ${projectName'} = {
+              projectName = projectName';
+              scripts = scripts;
+            };
+          };
+
         # Helper function to resolve glob patterns in workspace members
         resolveWorkspaceMembers =
           members: excludes:
@@ -187,6 +197,41 @@ in
             resolveWorkspaceMembers (workspaceConfig.members or [ ]) (workspaceConfig.exclude or [ ])
           else
             [ ];
+
+        # Get all workspace member project info
+        workspaceMemberProjects =
+          if isWorkspace then
+            builtins.listToAttrs (
+              builtins.filter (x: x != null) (
+                map (
+                  memberPath:
+                  let
+                    memberDir = uvpart.workspaceRoot + "/${memberPath}";
+                    memberTomlPath = memberDir + "/pyproject.toml";
+                  in
+                  if builtins.pathExists memberTomlPath then
+                    let
+                      memberToml = builtins.fromTOML (builtins.readFile memberTomlPath);
+                      memberProjectName = memberToml.project.name or null;
+                      memberScripts = builtins.attrNames (memberToml.project.scripts or { });
+                    in
+                    if memberProjectName != null then
+                      {
+                        name = memberProjectName;
+                        value = {
+                          projectName = memberProjectName;
+                          scripts = memberScripts;
+                        };
+                      }
+                    else
+                      null
+                  else
+                    null
+                ) workspaceMembers
+              )
+            )
+          else
+            { };
 
         # Shared function to build editable fileset
         buildEditableFileset =
@@ -355,37 +400,58 @@ in
           else
             { };
 
-        package =
-          if projectName' != null then
-            pkgs.callPackage (
-              {
-                dependencyGroups ? uvpart.dependencyGroups,
-              }:
-              let
-                environment' = environment.override { inherit dependencyGroups; };
-                inherit (pkgs.callPackages inputs.pyproject-nix.build.util { }) mkApplication;
-              in
-              mkApplication {
-                venv = environment';
-                package = pythonSet.${projectName'};
-              }
-            ) { }
+        # Build packages for all projects
+        packages = builtins.mapAttrs (
+          name: projectInfo:
+          pkgs.callPackage (
+            {
+              dependencyGroups ? uvpart.dependencyGroups,
+            }:
+            let
+              environment' = environment.override { inherit dependencyGroups; };
+              inherit (pkgs.callPackages inputs.pyproject-nix.build.util { }) mkApplication;
+            in
+            mkApplication {
+              venv = environment';
+              package = pythonSet.${projectInfo.projectName};
+            }
+          ) { }
+        ) allPackages;
+
+        # Choose default package (prefer root project, fallback to first workspace member)
+        defaultPackage =
+          if projectName' != null && builtins.hasAttr projectName' packages then
+            packages.${projectName'}
+          else if builtins.length (builtins.attrNames packages) > 0 then
+            packages.${builtins.head (builtins.attrNames packages)}
           else
             null;
-        defaultPackageExtension = lib.optionalAttrs (uvpart.publishPackage && package != null) {
-          default = package;
+
+        defaultPackageExtension = lib.optionalAttrs (uvpart.publishPackage && defaultPackage != null) {
+          default = defaultPackage;
         };
-        defaultApps = lib.optionalAttrs (uvpart.publishApps && package != null) (
-          builtins.listToAttrs (
-            map (name: {
-              inherit name;
-              value = {
-                type = "app";
-                program = "${package}/bin/${name}";
-              };
-            }) scripts
-          )
-        );
+
+        # Build apps for all projects
+        allApps = builtins.concatMap (
+          name:
+          let
+            projectInfo = allPackages.${name};
+            package = packages.${name};
+          in
+          map (scriptName: {
+            name =
+              if builtins.length (builtins.attrNames allPackages) > 1 then
+                "${name}-${scriptName}"
+              else
+                scriptName;
+            value = {
+              type = "app";
+              program = "${package}/bin/${scriptName}";
+            };
+          }) projectInfo.scripts
+        ) (builtins.attrNames allPackages);
+
+        defaultApps = lib.optionalAttrs uvpart.publishApps (builtins.listToAttrs allApps);
       in
       {
         config = {
@@ -420,9 +486,7 @@ in
                 ${uvpart.uv}/bin/uv lock --python ${uvpart.python}/bin/python
               '';
             }
-            // lib.optionalAttrs (projectName' != null && package != null) {
-              ${projectName'} = package;
-            }
+            // packages
             // defaultPackageExtension;
           apps = defaultApps;
         };
