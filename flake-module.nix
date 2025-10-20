@@ -295,29 +295,41 @@ in
                 workspace.deps.${dependencyGroups}
               else
                 workspace.deps.all
-                // {
-                  ${projectName} = dependencyGroups;
+                // lib.optionalAttrs (projectName' != null) {
+                  ${projectName'} = dependencyGroups;
                 }
             )
           else
             workspace.deps.default;
-        environment = pkgs.callPackage (
-          {
-            dependencyGroups ? uvpart.dependencyGroups,
-          }:
-          pythonSet.mkVirtualEnv (projectName' + "-env") (makeDeps dependencyGroups)
-        ) { };
-        editableEnvironment = pkgs.callPackage (
-          {
-            dependencyGroups ? "all",
-          }:
-          editablePythonSet.mkVirtualEnv (projectName' + "-editable-env") (makeDeps dependencyGroups)
-        ) { };
+        environment =
+          if projectName' != null then
+            pkgs.callPackage (
+              {
+                dependencyGroups ? uvpart.dependencyGroups,
+              }:
+              pythonSet.mkVirtualEnv (projectName' + "-env") (makeDeps dependencyGroups)
+            ) { }
+          else
+            null;
+        editableEnvironment =
+          if projectName' != null then
+            pkgs.callPackage (
+              {
+                dependencyGroups ? "all",
+              }:
+              editablePythonSet.mkVirtualEnv (projectName' + "-editable-env") (makeDeps dependencyGroups)
+            ) { }
+          else
+            null;
         pure-shell = pkgs.mkShell {
-          packages = [
-            editableEnvironment
-            uvpart.uv
-          ] ++ uvpart.extraPackages;
+          packages =
+            lib.optionals (editableEnvironment != null) [
+              editableEnvironment
+            ]
+            ++ [
+              uvpart.uv
+            ]
+            ++ uvpart.extraPackages;
           env = {
             UV_NO_SYNC = "1";
             UV_PYTHON = uvpart.python.interpreter;
@@ -375,18 +387,25 @@ in
       in
       {
         config = {
-          uvpart.outputs = {
-            inherit
-              pure-shell
-              impure-shell
-              environment
-              editableEnvironment
-              package
-              workspace
-              pythonSet
-              editablePythonSet
-              ;
-          };
+          uvpart.outputs =
+            {
+              inherit
+                pure-shell
+                impure-shell
+                workspace
+                pythonSet
+                editablePythonSet
+                ;
+            }
+            // lib.optionalAttrs (environment != null) {
+              inherit environment;
+            }
+            // lib.optionalAttrs (editableEnvironment != null) {
+              inherit editableEnvironment;
+            }
+            // lib.optionalAttrs (package != null) {
+              inherit package;
+            };
           devShells = {
             uv-pure-shell = pure-shell;
             uv-impure-shell = impure-shell;
