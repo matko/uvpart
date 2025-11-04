@@ -382,7 +382,7 @@ in
             { };
 
         # Build packages for all projects that actually exist in pythonSet
-        pythonPackages =
+        builtPackages =
           builtins.mapAttrs
             (
               name: projectInfo:
@@ -406,10 +406,10 @@ in
 
         # Choose default package (prefer root project, fallback to first workspace member)
         defaultPackage =
-          if projectName' != null && builtins.hasAttr projectName' pythonPackages then
-            pythonPackages.${projectName'}
-          else if builtins.length (builtins.attrNames pythonPackages) > 0 then
-            pythonPackages.${builtins.head (builtins.attrNames pythonPackages)}
+          if projectName' != null && builtins.hasAttr projectName' builtPackages then
+            builtPackages.${projectName'}
+          else if builtins.length (builtins.attrNames builtPackages) > 0 then
+            builtPackages.${builtins.head (builtins.attrNames builtPackages)}
           else
             null;
 
@@ -422,7 +422,7 @@ in
           name:
           let
             projectInfo = allPackages.${name};
-            package = packages.${name};
+            package = builtPackages.${name};
           in
           map (scriptName: {
             name =
@@ -467,7 +467,7 @@ in
               ${uvpart.uv}/bin/uv lock --python ${uvpart.python}/bin/python
             '';
           } // lib.optionalAttrs (builtins.pathExists "${inputs.self}/uv.lock") (
-            pythonPackages // defaultPackageExtension
+            builtPackages // defaultPackageExtension
           );
           apps = defaultApps;
         };
