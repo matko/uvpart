@@ -382,7 +382,7 @@ in
             { };
 
         # Build packages for all projects that actually exist in pythonSet
-        packages =
+        pythonPackages =
           builtins.mapAttrs
             (
               name: projectInfo:
@@ -406,10 +406,10 @@ in
 
         # Choose default package (prefer root project, fallback to first workspace member)
         defaultPackage =
-          if projectName' != null && builtins.hasAttr projectName' packages then
-            packages.${projectName'}
-          else if builtins.length (builtins.attrNames packages) > 0 then
-            packages.${builtins.head (builtins.attrNames packages)}
+          if projectName' != null && builtins.hasAttr projectName' pythonPackages then
+            pythonPackages.${projectName'}
+          else if builtins.length (builtins.attrNames pythonPackages) > 0 then
+            pythonPackages.${builtins.head (builtins.attrNames pythonPackages)}
           else
             null;
 
@@ -461,15 +461,14 @@ in
             uv-pure-shell = pure-shell;
             uv-impure-shell = impure-shell;
           } // defaultShellExtension;
-          packages =
-            {
-              uv-lock = pkgs.writeScriptBin "uv-lock" ''
-                #!${pkgs.bash}/bin/bash
-                ${uvpart.uv}/bin/uv lock --python ${uvpart.python}/bin/python
-              '';
-            }
-            // packages
-            // defaultPackageExtension;
+          packages = {
+            uv-lock = pkgs.writeScriptBin "uv-lock" ''
+              #!${pkgs.bash}/bin/bash
+              ${uvpart.uv}/bin/uv lock --python ${uvpart.python}/bin/python
+            '';
+          } // lib.optionalAttrs (builtins.pathExists "${inputs.self}/uv.lock") (
+            pythonPackages // defaultPackageExtension
+          );
           apps = defaultApps;
         };
       };
