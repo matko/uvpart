@@ -96,6 +96,11 @@ in
                 default = "python313";
               };
               uv = mkPackageOption pkgs "uv" { };
+              venvIgnoreCollisions = mkOption {
+                type = types.listOf types.str;
+                description = "list of paths to ignore collisions for in the virtual environments that are built. set to [\"*\"] to just ignore collision";
+                default = [ ];
+              };
             };
           };
         };
@@ -257,7 +262,8 @@ in
             baseFiles = [
               pyprojectPath
               (lib.fileset.maybeMissing (root + "/README.md"))
-            ] ++ uvpart.editableFilterSet;
+            ]
+            ++ uvpart.editableFilterSet;
 
             # Module files - same logic for workspace members and single projects
             moduleFiles = lib.optionals (moduleName != null) [
@@ -298,20 +304,19 @@ in
           packages = [
             uvpart.python
             uvpart.uv
-          ] ++ uvpart.extraPackages;
-          env =
-            {
-              UV_PYTHON_DOWNLOADS = "never";
-              UV_PYTHON = uvpart.python.interpreter;
-            }
-            // lib.optionalAttrs pkgs.stdenv.isLinux {
-              LD_LIBRARY_PATH = lib.makeLibraryPath pkgs.pythonManylinuxPackages.manylinux1;
-            };
-          shellHook =
-            ''
-              unset PYTHONPATH
-            ''
-            + uvpart.shellHook;
+          ]
+          ++ uvpart.extraPackages;
+          env = {
+            UV_PYTHON_DOWNLOADS = "never";
+            UV_PYTHON = uvpart.python.interpreter;
+          }
+          // lib.optionalAttrs pkgs.stdenv.isLinux {
+            LD_LIBRARY_PATH = lib.makeLibraryPath pkgs.pythonManylinuxPackages.manylinux1;
+          };
+          shellHook = ''
+            unset PYTHONPATH
+          ''
+          + uvpart.shellHook;
 
         };
 
@@ -335,7 +340,9 @@ in
               {
                 dependencyGroups ? uvpart.dependencyGroups,
               }:
-              pythonSet.mkVirtualEnv (projectName' + "-env") (makeDeps dependencyGroups)
+              (pythonSet.mkVirtualEnv (projectName' + "-env") (makeDeps dependencyGroups)).overrideAttrs {
+                venvIgnoreCollisions = uvpart.venvIgnoreCollisions;
+              }
             ) { }
           else
             null;
@@ -345,7 +352,11 @@ in
               {
                 dependencyGroups ? "all",
               }:
-              editablePythonSet.mkVirtualEnv (projectName' + "-editable-env") (makeDeps dependencyGroups)
+              (editablePythonSet.mkVirtualEnv (projectName' + "-editable-env") (makeDeps dependencyGroups))
+              .overrideAttrs
+                {
+                  venvIgnoreCollisions = uvpart.venvIgnoreCollisions;
+                }
             ) { }
           else
             null;
@@ -364,14 +375,13 @@ in
             UV_PYTHON_DOWNLOADS = "never";
 
           };
-          shellHook =
-            ''
-              # Undo dependency propagation by nixpkgs.
-              unset PYTHONPATH
-              # Get repository root using git. This is expanded at runtime by the editable `.pth` machinery.
-              export REPO_ROOT=$(git rev-parse --show-toplevel)
-            ''
-            + uvpart.shellHook;
+          shellHook = ''
+            # Undo dependency propagation by nixpkgs.
+            unset PYTHONPATH
+            # Get repository root using git. This is expanded at runtime by the editable `.pth` machinery.
+            export REPO_ROOT=$(git rev-parse --show-toplevel)
+          ''
+          + uvpart.shellHook;
         };
         defaultShellExtension =
           if uvpart.defaultShell == "pure" then
@@ -441,32 +451,33 @@ in
       in
       {
         config = {
-          uvpart.outputs =
-            {
-              inherit
-                pure-shell
-                impure-shell
-                workspace
-                pythonSet
-                editablePythonSet
-                ;
-            }
-            // lib.optionalAttrs (environment != null) {
-              inherit environment;
-            }
-            // lib.optionalAttrs (editableEnvironment != null) {
-              inherit editableEnvironment;
-            };
+          uvpart.outputs = {
+            inherit
+              pure-shell
+              impure-shell
+              workspace
+              pythonSet
+              editablePythonSet
+              ;
+          }
+          // lib.optionalAttrs (environment != null) {
+            inherit environment;
+          }
+          // lib.optionalAttrs (editableEnvironment != null) {
+            inherit editableEnvironment;
+          };
           devShells = {
             uv-pure-shell = pure-shell;
             uv-impure-shell = impure-shell;
-          } // defaultShellExtension;
+          }
+          // defaultShellExtension;
           packages = {
             uv-lock = pkgs.writeScriptBin "uv-lock" ''
               #!${pkgs.bash}/bin/bash
               ${uvpart.uv}/bin/uv lock --python ${uvpart.python}/bin/python
             '';
-          } // lib.optionalAttrs (builtins.pathExists "${inputs.self}/uv.lock") (
+          }
+          // lib.optionalAttrs (builtins.pathExists "${inputs.self}/uv.lock") (
             builtPackages // defaultPackageExtension
           );
           apps = defaultApps;
