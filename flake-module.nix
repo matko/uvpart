@@ -40,6 +40,17 @@ in
                 description = "extra python overlays to apply (for fixups)";
                 default = [ ];
               };
+              cudaJitToolchain = mkOption {
+                type = types.nullOr types.bool;
+                description = ''
+                  Whether to provide a CUDA JIT toolchain: the compiler, headers and build
+                  tools that packages which compile CUDA C++ at run time need. null, the
+                  default, leaves the decision to whatever supplies the toolchain -- a
+                  fixup layer applies it when the environment carries the CUDA components
+                  itself. true forces it even without them; false suppresses it.
+                '';
+                default = null;
+              };
               workspaceConfig = mkOption {
                 type = types.oneOf [
                   (types.functionTo types.attrs)
