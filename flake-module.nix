@@ -51,6 +51,24 @@ in
                 '';
                 default = null;
               };
+              cudaArch = mkOption {
+                type = types.nullOr (types.listOf types.str);
+                description = ''
+                  Compute capabilities to compile CUDA kernels for: [ "8.9" ] for Ada
+                  alone, or [ "8.0" "8.6" "8.9" "9.0" ] to cover Ampere upward at roughly
+                  four times the build time. null, the default, leaves every package on
+                  its own default.
+
+                  When set, every kernel this environment compiles targets these
+                  capabilities, with PTX appended for the last one so the result also
+                  runs on cards newer than the list. Individual packages can still be
+                  overridden by a later entry in uvpart.pythonOverlays.
+
+                  It reaches only what is compiled here. A prebuilt wheel decides its
+                  own architectures at its own build time, and no setting changes that.
+                '';
+                default = null;
+              };
               workspaceConfig = mkOption {
                 type = types.oneOf [
                   (types.functionTo types.attrs)
